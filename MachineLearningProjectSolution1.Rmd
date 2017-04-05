@@ -1,0 +1,178 @@
+## **Machine Learning Course Project**
+
+# By Abhinav
+
+====================================================================
+
+# *Prediction of the Class of Exercise from Accelerometers Data*
+
+====================================================================
+
+Note: Since the writeup is to be limited to 2000 words so the results will be suppressed until it is important to understand the analysis
+
+The goal of your project is to predict the manner in which 6 participants did the exercise by using data from accelerometers on the belt, forearm, arm, and dumbell . This is the "classe" variable in the training set.
+
+Executive Summary: The exercise data was downloaded and cleaned. The data was explored and relevant predictors were identified. The data was then sliced into Training, Testing and Validation sets. Multiple Machine learning algorithms were fitted on Training set and tested on Testing Set. Effective ones having accuracy>70% were combined into a ensembled model. The ensembled model was found to have rediction accuracy of 98.98% and Kappa Value of 0.9871 on Validation set.
+
+Step 1. Download and Load the data into a data frame and do priliminary exploration
+Download script not shown.
+
+```{r DownloadLoadData, echo=TRUE, results='hide',warning=FALSE}
+
+library(caret)
+library(rattle)
+library(MASS)
+
+pmltraining<-read.csv("pml-training.csv")
+dim(pmltraining)
+
+pmltesting<-read.csv("pml-testing.csv")
+dim(pmltesting)
+nsv<-nearZeroVar(pmltraining,saveMetrics = TRUE)
+nsv
+overall<-pmltraining[,-c(1,3:7,12:36,50:59,69:83,87:101,103:112,125:139,141:150)]
+finaltest<-pmltesting[,-c(1,3:7,12:36,50:59,69:83,87:101,103:112,125:139,141:150)]
+dim(overall)
+table(pmltraining$user_name,pmltraining$classe)
+```
+- Check for near zero variance in data and remove those columns where zero or near zero variance is TRUE
+- Check in pmltesting file and check which columns do not have data in it. Remove those columns from the pmltraining data set. The Final Model build need to predict 20 cases in "pmltesting" 
+- Since the data is for different users and different activities, the exercise class are not expected to be time dependent so time related data will not be required for analysis and are removed
+- We are left with 54 columns (out of 160) which can be used for prediction 
+- Explore distribution of user_name versus classe using Table. It is found that sufficient data is  available for all users and all type of exercises.
+
+Step 2: Data Preprocessing and Slicing
+```{r ProcessSliceData, echo=TRUE, results='hide',warning=FALSE}
+set.seed(1234)
+inValidate<-createDataPartition(y=overall$classe,p=0.20,list=FALSE)
+validation<-overall[inValidate,]
+dim(validation)
+remaining<-overall[-inValidate,]
+dim(remaining)
+inTest<-createDataPartition(y=remaining$classe,p=0.25,list=FALSE)
+testing<-remaining[inTest,]
+training<-remaining[-inTest,]
+dim(testing)
+dim(training)
+```
+The training dataset is further subdivided into Training, Testing and Validation sataset.
+20% of the overall data is randomly subsampled into Validation test set and kept aside.
+Now rest of the data (80%) we want for crossvalidation. 25% of this data is sampled as testing and rest as training data. 
+Hence overall data is sliced into the ratio of 20% validation, 20% testing and 60% training.
+Since number of rows is large so it is assumed 60% of data in training will be sufficient to build the model.
+
+Step 3 Exploratory Data Analysis
+```{r ExploreData, echo=TRUE, results='show',warning=FALSE}
+
+hist(overall$roll_belt)
+boxplot(overall$roll_belt~overall$classe+overall$user_name)
+svd1<-svd(overall[,-c(1,54)])
+svd1$d
+plot(cumsum(svd1$d^2/sum(svd1$d^2)))
+plot(svd1$v[,1])
+
+```
+- create histogram for one of the columns roll_belt. It is observed that data is stacked as two different clusters
+- create boxplot for column roll_belt for classe and user name to check the distribution. It is seen that data is stacked together for set of three users in two groups.
+- It is likely that the data for different users for other columns may follow similar pattern 
+- check svd to see if variability can be explained by less no of predictors. By plotting the cumulative sum of diagonal values "d", it can be seen that variability of 90% is predicted by 6 parameters. So PCA can be an appropriate method if requirement of Accuracy is in the area of 90% - 95%. However authors have achieved accuracy of >99% and accuracy of >95% is required for predicting testing set of 20 samples correctly. Hence very low out of sample error is required
+- There is no pattern seen by plotting mean of all the columns using "v" matrix.
+
+Step 4 Model Building
+Model building done using following way
+a) Decision Tree
+b) Random Forest
+c) Boosting
+d) Linear Discriminant Analysis
+e) Knn using cv option
+f) knn using boot option
+
+Create a table "result" and store Accuracy value for all the Models
+
+
+```{r ModelBuilding+Accuracy, results='hide', echo=TRUE, warning=FALSE}
+
+set.seed(12323)
+
+result<-matrix(nrow=7,ncol=2)
+rownames(result)<-c("rpart","rf","gbm","lda","knn-cv","knn-boot","ens")
+colnames(result)<-c("TestAccuracy","ValidateAccuracy")
+
+modrpart<-train(classe~.,method="rpart",data=training)
+prdrpart<-predict(modrpart,newdata=testing)
+result[1,1]<-confusionMatrix(testing$classe,prdrpart)$overall[1]
+
+modrf01<-train(classe~.,method="rf",data=training)
+prdrf<-predict(modrf01,newdata=testing)
+result[2,1]<-confusionMatrix(testing$classe,prdrf)$overall[1]
+
+modgbm<-train(classe~.,method="gbm",data=training, verbose=FALSE)
+prdgbm<-predict(modgbm,newdata=testing)
+result[3,1]<-confusionMatrix(testing$classe,prdgbm)$overall[1]
+
+modlda<-lda(classe~.,data=training,prior=c(1,1,1,1,1)/5)
+prdlda<-predict(modlda,newdata=testing)
+result[4,1]<- confusionMatrix(testing$classe,prdlda$class)$overall[1]
+
+training$user_id<-as.numeric(training$user_name)
+testing$user_id<-as.numeric(testing$user_name)
+knnFit1 <- train(training[,-c(1,54)], training[,54],method = "knn",preProcess = c("center", "scale"),tuneLength = 10,trControl = trainControl(method = "cv"))
+prdknnFit1<-predict(knnFit1,testing[,-c(1,54)])
+result[5,1]<-confusionMatrix(testing$classe,prdknnFit1)$overall[1]
+
+knnFit2 <- train(training[,-c(1,54)], training[,54],method = "knn",preProcess = c("center", "scale"),tuneLength = 10,trControl = trainControl(method = "boot"))
+prdknnFit2<-predict(knnFit2,testing[,-c(1,54)])
+result[6,1]<-confusionMatrix(testing$classe,prdknnFit2)$overall[1]
+
+```
+
+Step 5: Build Ensemble model
+- Check accuracy of various Models and build Ensemble Model using good models (high accuracy)
+- All Models exept decision tree is giving good accuracy so they are considered for Ensemble Model
+- It is noted that Ensemble model is giving highest accuray than all the other models (~ 99%) 
+
+```{r EnsembleModel+Accuracy, results='show', echo=TRUE, warning=FALSE}
+
+print(result[,1])
+ensdata<-data.frame(prdrf,prdgbm,prdlda=prdlda$class,prdknnFit1,prdknnFit2,classe=testing$classe)
+combModFit<-train(classe~.,method="rf",data=ensdata)
+combPred<-predict(combModFit,ensdata)
+result[7,1]<-confusionMatrix(testing$classe,combPred)$overall[1]
+
+print(result[,1])
+```
+
+Step 5: Validate Ensemble model on Validation Data
+- Use Validation data set for the purpose
+
+```{r ValidationAccuracy, results='show', echo=TRUE, warning=FALSE}
+
+prdrf1<-predict(modrf01,newdata=validation)
+result[2,2]<-confusionMatrix(validation$classe,prdrf1)$overall[1]
+
+prdgbm1<-predict(modgbm,newdata=validation)
+result[3,2]<-confusionMatrix(validation$classe,prdgbm1)$overall[1]
+
+prdlda1<-predict(modlda,newdata=validation)
+result[4,2]<-confusionMatrix(validation$classe,prdlda1$class)$overall[1]
+
+
+validation$user_id<-as.numeric(validation$user_name)
+prdknnFit1a<-predict(knnFit1,validation[,-c(1,54)])
+result[5,2]<-confusionMatrix(validation$classe,prdknnFit1a)$overall[1]
+
+prdknnFit2a<-predict(knnFit2,validation[,-c(1,54)])
+result[6,2]<-confusionMatrix(validation$classe,prdknnFit2a)$overall[1]
+
+ensdata1<-data.frame(prdrf=prdrf1,prdgbm=prdgbm1,prdlda=prdlda1$class,prdknnFit1=prdknnFit1a,prdknnFit2=prdknnFit2a)
+combPred1<-predict(combModFit,ensdata1)
+result[7,2]<-confusionMatrix(validation$classe,combPred1)$overall[1]
+
+print(result)
+
+```
+It can be seen that the Prediction Accuracy obtained by Ensemble Model on Validation data set is ~99%
+
+Note: Use of prediction model for 20 test cases is not shown. 
+
+*End of Report*
